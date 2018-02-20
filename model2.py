@@ -3,10 +3,10 @@ import tensorflow as tf
 from tensorflow.contrib.layers import batch_norm, fully_connected, flatten
 from tensorflow.contrib.layers import xavier_initializer
 from scipy.io import wavfile
-from generator import *
+from generator2 import *
 from discriminator import *
 import numpy as np
-from data_loader import read_and_decode, de_emph
+from data_loader2 import read_and_decode, de_emph
 from bnorm import VBN
 from ops import *
 import timeit
@@ -149,15 +149,16 @@ class SEGAN(Model):
         if gpu_idx == 0:
             # create the nodes to load for input pipeline
             filename_queue = tf.train.string_input_producer([self.e2e_dataset])
-            self.get_wav, self.get_noisy \
+            self.get_wav, self.get_noisy, self.get_ref \
                 = read_and_decode(filename_queue,
                                   self.canvas_size,
                                   self.preemph)
 
         # load the data to input pipeline
-        wavbatch, noisybatch \
+        wavbatch, noisybatch, refbatch \
             = tf.train.shuffle_batch([self.get_wav,
-                                      self.get_noisy],
+                                      self.get_noisy,
+                                      self.get_ref],
                                      batch_size=self.batch_size,
                                      num_threads=2,
                                      capacity=1000 + 3 * self.batch_size,
@@ -175,6 +176,7 @@ class SEGAN(Model):
         # add channels dimension to manipulate in D and G
         wavbatch = tf.expand_dims(wavbatch, -1)
         noisybatch = tf.expand_dims(noisybatch, -1)
+        refbatch = tf.expand_dims(refbatch, -1)
         # by default leaky relu is used
         do_prelu = False
         if self.g_nl == 'prelu':
@@ -183,7 +185,7 @@ class SEGAN(Model):
             #self.sample_wavs = tf.placeholder(tf.float32, [self.batch_size,
             #                                               self.canvas_size],
             #                                  name='sample_wavs')
-            ref_Gs = self.generator(noisybatch, is_ref=True,
+            ref_Gs = self.generator(noisybatch, refbatch, is_ref=True,
                                     spk=None,
                                     do_prelu=do_prelu)
             print('num of G returned: ', len(ref_Gs))
@@ -203,7 +205,7 @@ class SEGAN(Model):
             dummy = discriminator(self, dummy_joint,
                                   reuse=False)
 
-        G, z  = self.generator(noisybatch, is_ref=False, spk=None,
+        G, z  = self.generator(noisybatch, refbatch, is_ref=False, spk=None,
                                do_prelu=do_prelu)
         self.Gs.append(G)
         self.zs.append(z)
@@ -628,12 +630,13 @@ class SEAE(Model):
         if gpu_idx == 0:
             # create the nodes to load for input pipeline
             filename_queue = tf.train.string_input_producer([self.e2e_dataset])
-            self.get_wav, self.get_noisy = read_and_decode(filename_queue,
+            self.get_wav, self.get_noisy, self.get_ref = read_and_decode(filename_queue,
                                                                          2 ** 14)
         # load the data to input pipeline
-        wavbatch, noisybatch \
+        wavbatch, noisybatch, refbatch \
             = tf.train.shuffle_batch([self.get_wav,
-                                      self.get_noisy],
+                                      self.get_noisy,
+                                      self.get_ref],
                                       batch_size=self.batch_size,
                                       num_threads=2,
                                       capacity=1000 + 3 * self.batch_size,
@@ -651,14 +654,15 @@ class SEAE(Model):
         # add channels dimension to manipulate in D and G
         wavbatch = tf.expand_dims(wavbatch, -1)
         noisybatch = tf.expand_dims(noisybatch, -1)
+        refbatch = tf.expand_dims(refbatch, -1)
         if gpu_idx == 0:
             #self.sample_wavs = tf.placeholder(tf.float32, [self.batch_size,
             #                                               self.canvas_size],
             #                                  name='sample_wavs')
-            self.reference_G = self.generator(noisybatch, is_ref=True,
+            self.reference_G = self.generator(noisybatch, refbatch, is_ref=True,
                                               spk=None, z_on=False)
 
-        G = self.generator(noisybatch, is_ref=False, spk=None, z_on=False)
+        G = self.generator(noisybatch, refbatch, is_ref=False, spk=None, z_on=False)
         print('GAE shape: ', G.get_shape())
         self.Gs.append(G)
 
