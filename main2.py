@@ -1,3 +1,4 @@
+
 from __future__ import print_function
 import tensorflow as tf
 import numpy as np
@@ -6,6 +7,9 @@ import os
 from tensorflow.python.client import device_lib
 from scipy.io import wavfile
 from data_loader2 import pre_emph
+
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 devices = device_lib.list_local_devices()
@@ -75,6 +79,8 @@ def main(_):
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     config.allow_soft_placement=True
+    #config.intra_op_parallelism_threads = 1
+    #config.inter_op_parallelism_threads = 1
     udevices = []
     for device in devices:
         if len(devices) > 1 and 'cpu' in device.name:

@@ -7,7 +7,7 @@ import numpy as np
 def pre_emph(x, coeff=0.95):
     x0 = tf.reshape(x[0], [1,])
     diff = x[1:] - coeff * x[:-1]
-    concat = tf.concat(0, [x0, diff])
+    concat = tf.concat([x0, diff], 0)
     return concat
 
 def de_emph(y, coeff=0.95):
@@ -22,13 +22,13 @@ def de_emph(y, coeff=0.95):
 def read_and_decode(filename_queue, canvas_size, preemph=0.):
     reader = tf.TFRecordReader()
     count = 0
-    while count < 100:
-        try:
-            _, serialized_example = reader.read(filename_queue)
-            break
-        except:
-            print('Skipped due to an error in reading {}'.format(filename_queue))
-            count = count + 1
+    #while count < 100:
+    #    try:
+    _, serialized_example = reader.read(filename_queue)
+    #        break
+    #    except:
+     #       print('Skipped due to an error in reading {}'.format(filename_queue))
+    #        count = count + 1
     features = tf.parse_single_example(
             serialized_example,
             features={

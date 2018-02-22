@@ -246,7 +246,7 @@ def repeat_elements(x, rep, axis):
     splits = tf.split(split_dim=axis, num_split=x_shape[axis], value=x)
     # repeat each slice the given number of reps
     x_rep = [s for s in splits for _ in range(rep)]
-    return tf.concat(axis, x_rep)
+    return tf.concat(x_rep, axis)
 
 def nn_deconv(x, kwidth=5, dilation=2, init=None, uniform=False,
               bias_init=None, name='nn_deconv1d'):
@@ -339,7 +339,7 @@ def average_gradients(tower_grads):
             grads.append(expanded_g)
 
         # Build the tensor and average along tower dimension
-        grad = tf.concat(0, grads)
+        grad = tf.concat(grads, 0)
         grad = tf.reduce_mean(grad, 0)
 
         # The Variables are redundant because they are shared across towers

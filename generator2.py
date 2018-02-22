@@ -49,7 +49,7 @@ class Generator(object):
         kwidth = 3
         z = make_z([segan.batch_size, h_i.get_shape().as_list()[1],
                     segan.g_enc_depths[-1]])
-        h_i = tf.concat(2, [h_i, z])
+        h_i = tf.concat([h_i, z], 2)
         skip_out = True
         skips = []
         for block_idx, dilation in enumerate(segan.g_dilated_blocks):
@@ -139,7 +139,7 @@ class AEGenerator(object):
             h_ir = tf.expand_dims(ref_w, -1)
         elif len(in_dims) < 2 or len(in_dims) > 3:
             raise ValueError('Generator input must be 2-D or 3-D')
-        h_i = tf.concat(2, [h_i, h_ir])
+        h_i = tf.concat([h_i, h_ir], 2)
         kwidth = 31
         enc_layers = 7
         skips = []
@@ -190,7 +190,7 @@ class AEGenerator(object):
                 # random code is fused with intermediate representation
                 z = make_z([segan.batch_size, h_i.get_shape().as_list()[1],
                             segan.g_enc_depths[-1]])
-                h_i = tf.concat(2, [z, h_i])
+                h_i = tf.concat([z, h_i], 2)
 
             #SECOND DECODER (reverse order)
             g_dec_depths = segan.g_enc_depths[:-1][::-1] + [1]
@@ -249,7 +249,7 @@ class AEGenerator(object):
                     if is_ref:
                         print('Fusing skip connection of '
                               'shape {}'.format(skip_.get_shape()))
-                    h_i = tf.concat(2, [h_i, skip_])
+                    h_i = tf.concat([h_i, skip_], 2)
 
                 else:
                     if is_ref:
