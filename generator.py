@@ -7,6 +7,7 @@ import numpy as np
 
 
 class Generator(object):
+
     def __init__(self, segan):
         self.segan = segan
 
@@ -100,7 +101,7 @@ class AEGenerator(object):
     def __init__(self, segan):
         self.segan = segan
 
-    def __call__(self, noisy_w, is_ref, spk=None, z_on=True, do_prelu=False):
+    def __call__(self, noisy_w, ref_w, is_ref, spk=None, z_on=True, do_prelu=False):
         # TODO: remove c_vec
         """ Build the graph propagating (noisy_w) --> x
         On first pass will make variables.
@@ -133,10 +134,16 @@ class AEGenerator(object):
             print('*** Building Generator ***')
         in_dims = noisy_w.get_shape().as_list()
         h_i  = noisy_w
+        if ref_w is not None:
+            h_ir = ref_w
         if len(in_dims) == 2:
             h_i  = tf.expand_dims(noisy_w, -1)
+            if ref_w is not None:
+                h_ir = tf.expand_dims(ref_w, -1)
         elif len(in_dims) < 2 or len(in_dims) > 3:
             raise ValueError('Generator input must be 2-D or 3-D')
+        if ref_w is not None:
+            h_i = tf.concat(2, [h_i, h_ir])
         kwidth = 31
         enc_layers = 7
         skips = []

@@ -42,7 +42,7 @@ class VBN(object):
             return out
 
     def _normalize(self, x, mean, mean_sq, message):
-        # make sure this is called with a variable scope
+# make sure this is called with a variable scope
         shape = x.get_shape().as_list()
         assert len(shape) == 3
         self.gamma = tf.get_variable("gamma", [shape[-1]],

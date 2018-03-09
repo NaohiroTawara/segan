@@ -6,7 +6,7 @@ from scipy.io import wavfile
 from generator import *
 from discriminator import *
 import numpy as np
-from data_loader import read_and_decode, de_emph
+from data_loader import read_and_decode, de_emph, pre_emph
 from bnorm import VBN
 from ops import *
 import timeit
@@ -23,7 +23,7 @@ class Model(object):
         if not os.path.exists(save_path):
             os.makedirs(save_path)
         if not hasattr(self, 'saver'):
-            self.saver = tf.train.Saver()
+            self.saver = tf.train.Saver(max_to_keep=0)
         self.saver.save(self.sess,
                         os.path.join(save_path, model_name),
                         global_step=step)
@@ -115,6 +115,7 @@ class SEGAN(Model):
             self.generator = Generator(self)
         else:
             raise ValueError('Unrecognized G type {}'.format(args.g_type))
+        self.reference_input = args.reference_input
         self.build_model(args)
 
     def build_model(self, config):
@@ -149,32 +150,51 @@ class SEGAN(Model):
         if gpu_idx == 0:
             # create the nodes to load for input pipeline
             filename_queue = tf.train.string_input_producer([self.e2e_dataset])
-            self.get_wav, self.get_noisy \
+            self.get_wav, self.get_noisy, self.get_ref \
                 = read_and_decode(filename_queue,
                                   self.canvas_size,
+                                  self.reference_input,
                                   self.preemph)
 
         # load the data to input pipeline
-        wavbatch, noisybatch \
-            = tf.train.shuffle_batch([self.get_wav,
-                                      self.get_noisy],
-                                     batch_size=self.batch_size,
-                                     num_threads=2,
-                                     capacity=1000 + 3 * self.batch_size,
-                                     min_after_dequeue=1000,
-                                     name='wav_and_noisy')
+        if self.get_ref is not None:
+            wavbatch, noisybatch, refbatch \
+                = tf.train.shuffle_batch([self.get_wav,
+                                          self.get_noisy,
+                                          self.get_ref],
+                                         batch_size=self.batch_size,
+                                         num_threads=2,
+                                         capacity=1000 + 3 * self.batch_size,
+                                         min_after_dequeue=1000,
+                                         name='wav_and_noisy')
+        else:
+            wavbatch, noisybatch \
+                = tf.train.shuffle_batch([self.get_wav,
+                                          self.get_noisy],
+                                         batch_size=self.batch_size,
+                                         num_threads=2,
+                                         capacity=1000 + 3 * self.batch_size,
+                                         min_after_dequeue=1000,
+                                         name='wav_and_noisy')
         if gpu_idx == 0:
             self.Gs = []
             self.zs = []
             self.gtruth_wavs = []
             self.gtruth_noisy = []
+            self.gtruth_refs = []
 
         self.gtruth_wavs.append(wavbatch)
         self.gtruth_noisy.append(noisybatch)
+        if self.get_ref is not None:
+            self.gtruth_refs.append(refbatch)
 
         # add channels dimension to manipulate in D and G
         wavbatch = tf.expand_dims(wavbatch, -1)
         noisybatch = tf.expand_dims(noisybatch, -1)
+        if self.get_ref is not None:
+            refbatch = tf.expand_dims(refbatch, -1)
+        else:
+            refbatch = None
         # by default leaky relu is used
         do_prelu = False
         if self.g_nl == 'prelu':
@@ -183,7 +203,7 @@ class SEGAN(Model):
             #self.sample_wavs = tf.placeholder(tf.float32, [self.batch_size,
             #                                               self.canvas_size],
             #                                  name='sample_wavs')
-            ref_Gs = self.generator(noisybatch, is_ref=True,
+            ref_Gs = self.generator(noisybatch, refbatch, is_ref=True,
                                     spk=None,
                                     do_prelu=do_prelu)
             print('num of G returned: ', len(ref_Gs))
@@ -203,7 +223,7 @@ class SEGAN(Model):
             dummy = discriminator(self, dummy_joint,
                                   reuse=False)
 
-        G, z  = self.generator(noisybatch, is_ref=False, spk=None,
+        G, z  = self.generator(noisybatch, refbatch, is_ref=False, spk=None,
                                do_prelu=do_prelu)
         self.Gs.append(G)
         self.zs.append(z)
@@ -245,8 +265,7 @@ class SEGAN(Model):
         d_loss = d_rl_loss + d_fk_loss
 
         # Add the L1 loss to G
-        g_l1_loss = self.l1_lambda * tf.reduce_mean(tf.abs(tf.sub(G,
-                                                                  wavbatch)))
+        g_l1_loss = self.l1_lambda * tf.reduce_mean(tf.abs(tf.sub(G, wavbatch)))
 
         g_loss = g_adv_loss + g_l1_loss
 
@@ -390,6 +409,24 @@ class SEGAN(Model):
             print('[*] Load SUCCESS')
         else:
             print('[!] Load failed')
+
+        if config.online_test_list is not None:
+            testwaves= []
+            with open(config.online_test_list) as f:
+                for line in f.readlines():
+                    wavfilename = line.replace('\n', '')
+                    wavname = wavfilename.split('/')[-1]
+                    fm, wav_data = wavfile.read(wavfilename)
+                    if fm != 16000:
+                        raise ValueError('16kHz required! Test file is different')
+                    wave = (2. / 65535.) * (wav_data.astype(np.float32) - 32767) + 1.
+                    if config.preemph > 0:
+                        #print('preemph test wave with {}'.format(config.preemph))
+                        x_pholder  = tf.placeholder(tf.float32, shape=[wave.shape[0], ])
+                        preemph_op = pre_emph(x_pholder, config.preemph)
+                        wave = self.sess.run(preemph_op, feed_dict={x_pholder: wave})
+                        testwaves.append((wavname.replace(".wav",""), wave))
+
         batch_idx = 0
         curr_epoch = 0
         batch_timings = []
@@ -442,11 +479,11 @@ class SEGAN(Model):
                 d_rl_losses.append(d_rl_loss)
                 g_adv_losses.append(g_adv_loss)
                 g_l1_losses.append(g_l1_loss)
-                print('{}/{} (epoch {}), d_rl_loss = {:.5f}, '
-                      'd_fk_loss = {:.5f}, '#d_nfk_loss = {:.5f}, '
-                      'g_adv_loss = {:.5f}, g_l1_loss = {:.5f},'
-                      ' time/batch = {:.5f}, '
-                      'mtime/batch = {:.5f}'.format(counter,
+                print("{}/{} (epoch {}), d_rl_loss = {:.5f}, "
+                      "d_fk_loss = {:.5f}, "  # d_nfk_loss = {:.5f}, "
+                      "g_adv_loss = {:.5f}, g_l1_loss = {:.5f},"
+                      " time/batch = {:.5f}, "
+                      "mtime/batch = {:.5f}".format(counter,
                                                     config.epoch * num_batches,
                                                     curr_epoch,
                                                     d_rl_loss,
@@ -491,7 +528,7 @@ class SEGAN(Model):
                                                        'noisy_{}.'
                                                        'wav'.format(m)),
                                           16e3,
-                                          de_emph(sample_noisy[m],
+                                        de_emph(sample_noisy[m],
                                                   self.preemph))
                             wavfile.write(os.path.join(save_path,
                                                        'dif_{}.wav'.format(m)),
@@ -506,6 +543,15 @@ class SEGAN(Model):
                                    g_adv_losses)
                         np.savetxt(os.path.join(save_path, 'g_l1_losses.txt'),
                                    g_l1_losses)
+
+                    if config.online_test_list is not None:
+
+                        for testwav in testwaves:
+                            c_wave = self.clean(testwav[1])
+                            print('c wave min:{}  max:{}'.format(np.min(c_wave), np.max(c_wave)))
+                            wavfile.write(os.path.join(config.save_clean_path, "{}_{}.wav".format(testwav[0],counter)), 16e3, c_wave)
+                        # Write test waves
+
 
                 if batch_idx >= num_batches:
                     curr_epoch += 1
@@ -548,7 +594,7 @@ class SEGAN(Model):
             coord.request_stop()
         coord.join(threads)
 
-    def clean(self, x):
+    def clean(self, x, ref):
         """ clean a utterance x
             x: numpy array containing the normalized noisy waveform
         """
@@ -561,12 +607,21 @@ class SEGAN(Model):
                 length = self.canvas_size
                 pad = 0
             x_ = np.zeros((self.batch_size, self.canvas_size))
+            if ref is not None:
+                ref_ =  np.zeros((self.batch_size, self.canvas_size))
+                if pad > 0:
+                    ref_[0] = np.concatenate((ref[beg_i:beg_i + length], np.zeros(pad)))
+                else:
+                    ref_[0] = ref[beg_i:beg_i + length]
             if pad > 0:
                 x_[0] = np.concatenate((x[beg_i:beg_i + length], np.zeros(pad)))
             else:
                 x_[0] = x[beg_i:beg_i + length]
             print('Cleaning chunk {} -> {}'.format(beg_i, beg_i + length))
-            fdict = {self.gtruth_noisy[0]:x_}
+            if ref is not None:
+                fdict = {self.gtruth_noisy[0]:x_, self.gtruth_refs[0]:ref_}
+            else:
+                fdict = {self.gtruth_noisy[0]: x_}
             canvas_w = self.sess.run(self.Gs[0],
                                      feed_dict=fdict)[0]
             canvas_w = canvas_w.reshape((self.canvas_size))
@@ -628,16 +683,17 @@ class SEAE(Model):
         if gpu_idx == 0:
             # create the nodes to load for input pipeline
             filename_queue = tf.train.string_input_producer([self.e2e_dataset])
-            self.get_wav, self.get_noisy = read_and_decode(filename_queue,
+            self.get_wav, self.get_noisy, self.get_ref = read_and_decode(filename_queue,
                                                                          2 ** 14)
         # load the data to input pipeline
-        wavbatch, noisybatch \
+        wavbatch, noisybatch, refbatch \
             = tf.train.shuffle_batch([self.get_wav,
-                                      self.get_noisy],
+                                      self.get_noisy,
+                                      self.get_ref],
                                       batch_size=self.batch_size,
                                       num_threads=2,
                                       capacity=1000 + 3 * self.batch_size,
-                                      in_after_dequeue=1000,
+                                      min_after_dequeue=1000,
                                       name='wav_and_noisy')
         if gpu_idx == 0:
             self.Gs = []
@@ -651,14 +707,15 @@ class SEAE(Model):
         # add channels dimension to manipulate in D and G
         wavbatch = tf.expand_dims(wavbatch, -1)
         noisybatch = tf.expand_dims(noisybatch, -1)
+        refbatch = tf.expand_dims(refbatch, -1)
         if gpu_idx == 0:
             #self.sample_wavs = tf.placeholder(tf.float32, [self.batch_size,
             #                                               self.canvas_size],
             #                                  name='sample_wavs')
-            self.reference_G = self.generator(noisybatch, is_ref=True,
+            self.reference_G = self.generator(noisybatch, refbatch, is_ref=True,
                                               spk=None, z_on=False)
 
-        G = self.generator(noisybatch, is_ref=False, spk=None, z_on=False)
+        G = self.generator(noisybatch, refbatch, is_ref=False, spk=None, z_on=False)
         print('GAE shape: ', G.get_shape())
         self.Gs.append(G)
 

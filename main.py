@@ -50,12 +50,16 @@ flags.DEFINE_string("synthesis_path", "dwavegan_samples", "Path to save output"
                                                           " generated samples."
                                                           " (Def: dwavegan_sam"
                                                           "ples).")
-flags.DEFINE_string("e2e_dataset", "data/segan.tfrecords", "TFRecords"
+flags.DEFINE_string("e2e_dataset", "data3/segan.tfrecords", "TFRecords"
                                                           " (Def: data/"
                                                           "segan.tfrecords.")
 flags.DEFINE_string("save_clean_path", "test_clean_results", "Path to save clean utts")
 flags.DEFINE_string("test_wav", None, "name of test wav (it won't train)")
+flags.DEFINE_string("online_test_list", None, "name of test wav (it will train)")
+flags.DEFINE_string("test_list", None, "name of test wav (it will train)")
 flags.DEFINE_string("weights", None, "Weights file")
+flags.DEFINE_boolean("reference_input", False,
+                     "activate reference input (Def: False)")
 FLAGS = flags.FLAGS
 
 def pre_emph_test(coeff, canvas_size):
@@ -64,9 +68,9 @@ def pre_emph_test(coeff, canvas_size):
     return x_, x_preemph
 
 def main(_):
-    print('Parsed arguments: ', FLAGS.__flags)
-
     # make save path if it is required
+    if not os.path.exists(FLAGS.save_clean_path):
+        os.makedirs(FLAGS.save_clean_path)
     if not os.path.exists(FLAGS.save_path):
         os.makedirs(FLAGS.save_path)
     if not os.path.exists(FLAGS.synthesis_path):
@@ -92,31 +96,47 @@ def main(_):
             se_model = SEAE(sess, FLAGS, udevices)
         else:
             raise ValueError('{} model type not understood!'.format(FLAGS.model))
-        if FLAGS.test_wav is None:
+        if FLAGS.test_list is None:
+            print("Start training...")
             se_model.train(FLAGS, udevices)
         else:
             if FLAGS.weights is None:
                 raise ValueError('weights must be specified!')
-            print('Loading model weights...')
+            print('Loading model weights from {}/{}...'.format(FLAGS.save_path, FLAGS.weights))
             se_model.load(FLAGS.save_path, FLAGS.weights)
-            fm, wav_data = wavfile.read(FLAGS.test_wav)
-            wavname = FLAGS.test_wav.split('/')[-1]
-            if fm != 16000:
-                raise ValueError('16kHz required! Test file is different')
-            wave = (2./65535.) * (wav_data.astype(np.float32) - 32767) + 1.
-            if FLAGS.preemph  > 0:
-                print('preemph test wave with {}'.format(FLAGS.preemph))
-                x_pholder, preemph_op = pre_emph_test(FLAGS.preemph, wave.shape[0])
-                wave = sess.run(preemph_op, feed_dict={x_pholder:wave})
-            print('test wave shape: ', wave.shape)
-            print('test wave min:{}  max:{}'.format(np.min(wave), np.max(wave)))
-            c_wave = se_model.clean(wave)
-            print('c wave min:{}  max:{}'.format(np.min(c_wave), np.max(c_wave)))
-            wavfile.write(os.path.join(FLAGS.save_clean_path, wavname), 16e3, c_wave)
-            print('Done cleaning {} and saved '
-                  'to {}'.format(FLAGS.test_wav,
-                                 os.path.join(FLAGS.save_clean_path, wavname)))
-
+            with open(FLAGS.test_list) as f:
+                for line in f.readlines():
+                    wavfilename = line.replace('\n','')
+                    if FLAGS.reference_input:
+                        wavfilename, reffilename = wavfilename.split(' ')
+                        fm, ref_data = wavfile.read(reffilename)
+                        if fm != 16000:
+                            raise ValueError('16kHz required! Test file is different')
+                        wave = (2. / 65535.) * (ref_data.astype(np.float32) - 32767) + 1.
+                        if FLAGS.preemph  > 0:
+                            print('preemph test wave with {}'.format(FLAGS.preemph))
+                            x_pholder, preemph_op = pre_emph_test(FLAGS.preemph, wave.shape[0])
+                            ref_wave = sess.run(preemph_op, feed_dict={x_pholder:wave})
+                    else:
+                        ref_wave = None
+                    print('Proceeding test file: %s' % wavfilename)
+                    fm, wav_data = wavfile.read(wavfilename)
+                    wavname = wavfilename.split('/')[-1]
+                    if fm != 16000:
+                        raise ValueError('16kHz required! Test file is different')
+                    wave = (2./65535.) * (wav_data.astype(np.float32) - 32767) + 1.
+                    if FLAGS.preemph  > 0:
+                        print('preemph test wave with {}'.format(FLAGS.preemph))
+                        x_pholder, preemph_op = pre_emph_test(FLAGS.preemph, wave.shape[0])
+                        wave = sess.run(preemph_op, feed_dict={x_pholder:wave})
+                    print('test wave shape: ', wave.shape)
+                    print('test wave min:{}  max:{}'.format(np.min(wave), np.max(wave)))
+                    c_wave = se_model.clean(wave, ref_wave)
+                    print('c wave min:{}  max:{}'.format(np.min(c_wave), np.max(c_wave)))
+                    wavfile.write(os.path.join(FLAGS.save_clean_path, wavname), 16e3, c_wave)
+                    print('Done cleaning {} and saved '
+                          'to {}'.format(wavfilename,
+                                         os.path.join(FLAGS.save_clean_path, wavname)))
 
 if __name__ == '__main__':
     tf.app.run()
